@@ -56,6 +56,10 @@ namespace Gsplat
         [Tooltip("Load frames asynchronously in background")]
         public bool AsyncLoading = true;
 
+        [Header("Interpolation Settings")]
+        [Tooltip("Enable frame interpolation for smoother playback")]
+        public bool EnableInterpolation = true;
+
         [Header("Rendering Settings")]
         [Range(0, 3)]
         public int SHDegree = 3;
@@ -67,13 +71,19 @@ namespace Gsplat
         float m_currentTime;
         int m_currentFrameIndex;
         int m_displayedFrameIndex = -1;
+        int m_displayedNextFrameIndex = -1;
+        float m_interpolationFactor;
 
         // Frame buffer
         Dictionary<int, GsplatPlyLoader.FrameData> m_frameBuffer = new Dictionary<int, GsplatPlyLoader.FrameData>();
         HashSet<int> m_loadingFrames = new HashSet<int>();
 
-        // Renderer
+        // Renderer (standard mode)
         GsplatRendererImpl m_renderer;
+
+        // Renderer (interpolation mode)
+        GsplatRendererImplInterp m_rendererInterp;
+
         uint m_currentSplatCount;
         byte m_currentSHBands;
         Bounds m_currentBounds;
@@ -84,11 +94,12 @@ namespace Gsplat
         public int TotalFrames => UsePreloadedAssets ? PreloadedFrames?.Length ?? 0 : EndFrame - StartFrame + 1;
         public float Duration => TotalFrames / Mathf.Max(FrameRate, 0.001f);
         public float CurrentTime => m_currentTime;
+        public float InterpolationFactor => m_interpolationFactor;
 
         // IGsplat implementation
         public bool Valid => m_currentSplatCount > 0;
         public uint SplatCount => m_currentSplatCount;
-        public ISorterResource SorterResource => m_renderer?.SorterResource;
+        public ISorterResource SorterResource => EnableInterpolation ? m_rendererInterp?.SorterResource : m_renderer?.SorterResource;
 
         void OnEnable()
         {
@@ -103,6 +114,8 @@ namespace Gsplat
             GsplatSorter.Instance.UnregisterGsplat(this);
             m_renderer?.Dispose();
             m_renderer = null;
+            m_rendererInterp?.Dispose();
+            m_rendererInterp = null;
             m_frameBuffer.Clear();
             m_loadingFrames.Clear();
         }
@@ -114,8 +127,16 @@ namespace Gsplat
                 UpdatePlayback();
             }
 
-            UpdateFrame();
-            RenderCurrentFrame();
+            if (EnableInterpolation)
+            {
+                UpdateFrameInterpolated();
+                RenderCurrentFrameInterpolated();
+            }
+            else
+            {
+                UpdateFrame();
+                RenderCurrentFrame();
+            }
         }
 
         void UpdatePlayback()
@@ -127,19 +148,26 @@ namespace Gsplat
 
             int totalFrames = TotalFrames;
             float frameDuration = 1f / Mathf.Max(FrameRate, 0.001f);
-            m_currentFrameIndex = Mathf.FloorToInt(m_currentTime / frameDuration);
+
+            // Calculate frame index and interpolation factor
+            float exactFrame = m_currentTime / frameDuration;
+            m_currentFrameIndex = Mathf.FloorToInt(exactFrame);
+            m_interpolationFactor = exactFrame - m_currentFrameIndex;
 
             if (Loop)
             {
                 if (m_currentFrameIndex >= totalFrames)
                 {
                     m_currentFrameIndex = 0;
-                    m_currentTime = 0;
+                    m_currentTime = m_currentTime % (totalFrames * frameDuration);
+                    exactFrame = m_currentTime / frameDuration;
+                    m_interpolationFactor = exactFrame - m_currentFrameIndex;
                 }
                 else if (m_currentFrameIndex < 0)
                 {
                     m_currentFrameIndex = totalFrames - 1;
                     m_currentTime = (totalFrames - 1) * frameDuration;
+                    m_interpolationFactor = 0;
                 }
             }
             else
@@ -147,11 +175,13 @@ namespace Gsplat
                 if (m_currentFrameIndex >= totalFrames)
                 {
                     m_currentFrameIndex = totalFrames - 1;
+                    m_interpolationFactor = 0;
                     m_isPlaying = false;
                 }
                 else if (m_currentFrameIndex < 0)
                 {
                     m_currentFrameIndex = 0;
+                    m_interpolationFactor = 0;
                     m_isPlaying = false;
                 }
             }
@@ -168,7 +198,10 @@ namespace Gsplat
             int totalFrames = TotalFrames;
             int direction = Reverse ? -1 : 1;
 
-            for (int i = 0; i < BufferSize; i++)
+            // When interpolation is enabled, always ensure next frame is also loaded
+            int extraFrames = EnableInterpolation ? 1 : 0;
+
+            for (int i = 0; i < BufferSize + extraFrames; i++)
             {
                 int frameToLoad = m_currentFrameIndex + i * direction;
                 if (Loop)
@@ -226,21 +259,16 @@ namespace Gsplat
             return Path.Combine(PlyFolderPath, fileName);
         }
 
-        void UpdateFrame()
+        GsplatPlyLoader.FrameData GetFrameData(int frameIndex)
         {
-            if (m_currentFrameIndex == m_displayedFrameIndex)
-                return;
-
-            GsplatPlyLoader.FrameData frameData = null;
-
             if (UsePreloadedAssets)
             {
-                if (PreloadedFrames != null && m_currentFrameIndex >= 0 && m_currentFrameIndex < PreloadedFrames.Length)
+                if (PreloadedFrames != null && frameIndex >= 0 && frameIndex < PreloadedFrames.Length)
                 {
-                    var asset = PreloadedFrames[m_currentFrameIndex];
+                    var asset = PreloadedFrames[frameIndex];
                     if (asset != null)
                     {
-                        frameData = new GsplatPlyLoader.FrameData
+                        return new GsplatPlyLoader.FrameData
                         {
                             SplatCount = asset.SplatCount,
                             SHBands = asset.SHBands,
@@ -256,24 +284,39 @@ namespace Gsplat
             }
             else
             {
-                if (m_frameBuffer.TryGetValue(m_currentFrameIndex, out frameData))
+                if (m_frameBuffer.TryGetValue(frameIndex, out var frameData))
                 {
-                    // Frame is already loaded
+                    return frameData;
                 }
                 else if (!AsyncLoading)
                 {
-                    // Synchronous loading
-                    string path = GetFramePath(m_currentFrameIndex);
+                    string path = GetFramePath(frameIndex);
                     frameData = GsplatPlyLoader.Load(path);
                     if (frameData != null)
                     {
-                        m_frameBuffer[m_currentFrameIndex] = frameData;
+                        m_frameBuffer[frameIndex] = frameData;
+                        return frameData;
                     }
                 }
             }
+            return null;
+        }
 
+        void UpdateFrame()
+        {
+            if (m_currentFrameIndex == m_displayedFrameIndex)
+                return;
+
+            var frameData = GetFrameData(m_currentFrameIndex);
             if (frameData == null)
                 return;
+
+            // Dispose interpolation renderer if switching modes
+            if (m_rendererInterp != null)
+            {
+                m_rendererInterp.Dispose();
+                m_rendererInterp = null;
+            }
 
             // Update renderer with new frame data
             bool needsRecreate = m_renderer == null ||
@@ -300,12 +343,99 @@ namespace Gsplat
             m_displayedFrameIndex = m_currentFrameIndex;
         }
 
+        void UpdateFrameInterpolated()
+        {
+            int totalFrames = TotalFrames;
+            int nextFrameIndex = m_currentFrameIndex + 1;
+            if (Loop)
+            {
+                nextFrameIndex = nextFrameIndex % totalFrames;
+            }
+            else
+            {
+                nextFrameIndex = Mathf.Min(nextFrameIndex, totalFrames - 1);
+            }
+
+            // Check if we need to update
+            if (m_currentFrameIndex == m_displayedFrameIndex && nextFrameIndex == m_displayedNextFrameIndex)
+                return;
+
+            var frameDataA = GetFrameData(m_currentFrameIndex);
+            var frameDataB = GetFrameData(nextFrameIndex);
+
+            // If we don't have both frames, fall back to showing current frame only
+            if (frameDataA == null)
+                return;
+
+            if (frameDataB == null)
+            {
+                frameDataB = frameDataA; // Use same frame if next isn't available
+            }
+
+            // Check compatibility
+            if (frameDataA.SplatCount != frameDataB.SplatCount || frameDataA.SHBands != frameDataB.SHBands)
+            {
+                Debug.LogWarning($"Frame {m_currentFrameIndex} and {nextFrameIndex} have different splat counts or SH bands. Interpolation disabled for this transition.");
+                frameDataB = frameDataA;
+            }
+
+            // Dispose standard renderer if switching modes
+            if (m_renderer != null)
+            {
+                m_renderer.Dispose();
+                m_renderer = null;
+            }
+
+            // Update renderer with new frame data
+            bool needsRecreate = m_rendererInterp == null ||
+                                 m_currentSplatCount != frameDataA.SplatCount ||
+                                 m_currentSHBands != frameDataA.SHBands;
+
+            if (needsRecreate)
+            {
+                m_rendererInterp?.Dispose();
+                m_rendererInterp = new GsplatRendererImplInterp(frameDataA.SplatCount, frameDataA.SHBands);
+            }
+
+            // Upload frame A data to GPU
+            m_rendererInterp.PositionBuffer.SetData(frameDataA.Positions);
+            m_rendererInterp.ScaleBuffer.SetData(frameDataA.Scales);
+            m_rendererInterp.RotationBuffer.SetData(frameDataA.Rotations);
+            m_rendererInterp.ColorBuffer.SetData(frameDataA.Colors);
+            if (frameDataA.SHBands > 0 && frameDataA.SHs != null)
+                m_rendererInterp.SHBuffer.SetData(frameDataA.SHs);
+
+            // Upload frame B data to GPU
+            m_rendererInterp.PositionBufferB.SetData(frameDataB.Positions);
+            m_rendererInterp.ScaleBufferB.SetData(frameDataB.Scales);
+            m_rendererInterp.RotationBufferB.SetData(frameDataB.Rotations);
+            m_rendererInterp.ColorBufferB.SetData(frameDataB.Colors);
+            if (frameDataB.SHBands > 0 && frameDataB.SHs != null)
+                m_rendererInterp.SHBufferB.SetData(frameDataB.SHs);
+
+            m_currentSplatCount = frameDataA.SplatCount;
+            m_currentSHBands = frameDataA.SHBands;
+            m_currentBounds = frameDataA.Bounds;
+            m_currentBounds.Encapsulate(frameDataB.Bounds);
+            m_displayedFrameIndex = m_currentFrameIndex;
+            m_displayedNextFrameIndex = nextFrameIndex;
+        }
+
         void RenderCurrentFrame()
         {
             if (Valid && m_renderer != null)
             {
                 m_renderer.Render(m_currentSplatCount, transform, m_currentBounds,
                     gameObject.layer, GammaToLinear, SHDegree);
+            }
+        }
+
+        void RenderCurrentFrameInterpolated()
+        {
+            if (Valid && m_rendererInterp != null)
+            {
+                m_rendererInterp.Render(m_currentSplatCount, transform, m_currentBounds,
+                    gameObject.layer, m_interpolationFactor, GammaToLinear, SHDegree);
             }
         }
 
@@ -341,6 +471,7 @@ namespace Gsplat
             m_isPlaying = false;
             m_currentTime = 0;
             m_currentFrameIndex = 0;
+            m_interpolationFactor = 0;
         }
 
         /// <summary>
@@ -352,6 +483,8 @@ namespace Gsplat
             int totalFrames = TotalFrames;
             m_currentFrameIndex = Mathf.Clamp(frameIndex, 0, totalFrames - 1);
             m_currentTime = m_currentFrameIndex / Mathf.Max(FrameRate, 0.001f);
+            m_interpolationFactor = 0;
+            m_displayedFrameIndex = -1; // Force update
 
             if (AsyncLoading && !UsePreloadedAssets && Application.isPlaying)
             {
@@ -366,7 +499,11 @@ namespace Gsplat
         public void SetTime(float time)
         {
             m_currentTime = Mathf.Clamp(time, 0, Duration);
-            m_currentFrameIndex = Mathf.FloorToInt(m_currentTime * FrameRate);
+            float frameDuration = 1f / Mathf.Max(FrameRate, 0.001f);
+            float exactFrame = m_currentTime / frameDuration;
+            m_currentFrameIndex = Mathf.FloorToInt(exactFrame);
+            m_interpolationFactor = exactFrame - m_currentFrameIndex;
+            m_displayedFrameIndex = -1; // Force update
 
             if (AsyncLoading && !UsePreloadedAssets && Application.isPlaying)
             {
@@ -419,6 +556,7 @@ namespace Gsplat
         {
             m_frameBuffer.Clear();
             m_displayedFrameIndex = -1;
+            m_displayedNextFrameIndex = -1;
         }
 
         /// <summary>

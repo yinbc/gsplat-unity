@@ -21,6 +21,7 @@ namespace Gsplat.Editor
         SerializedProperty m_reverse;
         SerializedProperty m_bufferSize;
         SerializedProperty m_asyncLoading;
+        SerializedProperty m_enableInterpolation;
         SerializedProperty m_shDegree;
         SerializedProperty m_gammaToLinear;
 
@@ -38,6 +39,7 @@ namespace Gsplat.Editor
             m_reverse = serializedObject.FindProperty("Reverse");
             m_bufferSize = serializedObject.FindProperty("BufferSize");
             m_asyncLoading = serializedObject.FindProperty("AsyncLoading");
+            m_enableInterpolation = serializedObject.FindProperty("EnableInterpolation");
             m_shDegree = serializedObject.FindProperty("SHDegree");
             m_gammaToLinear = serializedObject.FindProperty("GammaToLinear");
         }
@@ -102,6 +104,19 @@ namespace Gsplat.Editor
 
             EditorGUILayout.Space();
 
+            // Interpolation Settings
+            EditorGUILayout.LabelField("Interpolation Settings", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(m_enableInterpolation);
+            if (m_enableInterpolation.boolValue)
+            {
+                EditorGUILayout.HelpBox(
+                    "Interpolation blends between frames for smoother playback.\n" +
+                    "This uses 2x VRAM but reduces flickering.",
+                    MessageType.Info);
+            }
+
+            EditorGUILayout.Space();
+
             // Rendering Settings
             EditorGUILayout.LabelField("Rendering Settings", EditorStyles.boldLabel);
             EditorGUILayout.PropertyField(m_shDegree);
@@ -129,6 +144,15 @@ namespace Gsplat.Editor
                 EditorGUILayout.LabelField("Time:", GUILayout.Width(60));
                 EditorGUILayout.LabelField($"{player.CurrentTime:F2}s / {player.Duration:F2}s");
                 EditorGUILayout.EndHorizontal();
+
+                if (m_enableInterpolation.boolValue)
+                {
+                    EditorGUILayout.BeginHorizontal();
+                    EditorGUILayout.LabelField("Interp:", GUILayout.Width(60));
+                    EditorGUI.ProgressBar(EditorGUILayout.GetControlRect(), player.InterpolationFactor,
+                        $"{player.InterpolationFactor:P0}");
+                    EditorGUILayout.EndHorizontal();
+                }
 
                 if (!m_usePreloadedAssets.boolValue)
                 {
