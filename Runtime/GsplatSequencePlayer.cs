@@ -66,6 +66,13 @@ namespace Gsplat
 
         public bool GammaToLinear;
 
+        [Header("Debug Display")]
+        [Tooltip("Show frame info on screen")]
+        public bool ShowFrameInfo;
+
+        [Tooltip("Position of the frame info display")]
+        public TextAnchor DisplayPosition = TextAnchor.UpperLeft;
+
         // Playback state
         bool m_isPlaying;
         float m_currentTime;
@@ -437,6 +444,80 @@ namespace Gsplat
                 m_rendererInterp.Render(m_currentSplatCount, transform, m_currentBounds,
                     gameObject.layer, m_interpolationFactor, GammaToLinear, SHDegree);
             }
+        }
+
+        void OnGUI()
+        {
+            if (!ShowFrameInfo || !Application.isPlaying)
+                return;
+
+            // Create style
+            var style = new GUIStyle(GUI.skin.label)
+            {
+                fontSize = 24,
+                fontStyle = FontStyle.Bold,
+                normal = { textColor = Color.white }
+            };
+
+            // Build info text
+            string info = $"Frame: {m_currentFrameIndex + 1} / {TotalFrames}\n" +
+                          $"Time: {m_currentTime:F2}s / {Duration:F2}s";
+
+            if (EnableInterpolation)
+            {
+                info += $"\nInterp: {m_interpolationFactor:P0}";
+            }
+
+            if (!UsePreloadedAssets)
+            {
+                info += $"\nBuffered: {m_frameBuffer.Count}";
+            }
+
+            // Calculate position
+            Vector2 size = style.CalcSize(new GUIContent(info));
+            float padding = 10f;
+            Rect rect;
+
+            switch (DisplayPosition)
+            {
+                case TextAnchor.UpperLeft:
+                    rect = new Rect(padding, padding, size.x, size.y);
+                    break;
+                case TextAnchor.UpperCenter:
+                    rect = new Rect((Screen.width - size.x) / 2, padding, size.x, size.y);
+                    break;
+                case TextAnchor.UpperRight:
+                    rect = new Rect(Screen.width - size.x - padding, padding, size.x, size.y);
+                    break;
+                case TextAnchor.MiddleLeft:
+                    rect = new Rect(padding, (Screen.height - size.y) / 2, size.x, size.y);
+                    break;
+                case TextAnchor.MiddleCenter:
+                    rect = new Rect((Screen.width - size.x) / 2, (Screen.height - size.y) / 2, size.x, size.y);
+                    break;
+                case TextAnchor.MiddleRight:
+                    rect = new Rect(Screen.width - size.x - padding, (Screen.height - size.y) / 2, size.x, size.y);
+                    break;
+                case TextAnchor.LowerLeft:
+                    rect = new Rect(padding, Screen.height - size.y - padding, size.x, size.y);
+                    break;
+                case TextAnchor.LowerCenter:
+                    rect = new Rect((Screen.width - size.x) / 2, Screen.height - size.y - padding, size.x, size.y);
+                    break;
+                case TextAnchor.LowerRight:
+                    rect = new Rect(Screen.width - size.x - padding, Screen.height - size.y - padding, size.x, size.y);
+                    break;
+                default:
+                    rect = new Rect(padding, padding, size.x, size.y);
+                    break;
+            }
+
+            // Draw shadow
+            var shadowStyle = new GUIStyle(style) { normal = { textColor = Color.black } };
+            GUI.Label(new Rect(rect.x + 2, rect.y + 2, rect.width, rect.height), info, shadowStyle);
+
+            // Draw text
+            GUI.Label(rect, info, style);
         }
 
         // Public API
