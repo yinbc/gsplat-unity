@@ -24,6 +24,8 @@ namespace Gsplat.Editor
         SerializedProperty m_enableInterpolation;
         SerializedProperty m_shDegree;
         SerializedProperty m_gammaToLinear;
+        SerializedProperty m_showFrameInfo;
+        SerializedProperty m_displayPosition;
 
         void OnEnable()
         {
@@ -42,6 +44,8 @@ namespace Gsplat.Editor
             m_enableInterpolation = serializedObject.FindProperty("EnableInterpolation");
             m_shDegree = serializedObject.FindProperty("SHDegree");
             m_gammaToLinear = serializedObject.FindProperty("GammaToLinear");
+            m_showFrameInfo = serializedObject.FindProperty("ShowFrameInfo");
+            m_displayPosition = serializedObject.FindProperty("DisplayPosition");
         }
 
         public override void OnInspectorGUI()
@@ -121,6 +125,18 @@ namespace Gsplat.Editor
             EditorGUILayout.LabelField("Rendering Settings", EditorStyles.boldLabel);
             EditorGUILayout.PropertyField(m_shDegree);
             EditorGUILayout.PropertyField(m_gammaToLinear);
+
+            EditorGUILayout.Space();
+
+            // Debug Display
+            EditorGUILayout.LabelField("Debug Display", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(m_showFrameInfo, new GUIContent("Show Frame Info"));
+            if (m_showFrameInfo.boolValue)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.PropertyField(m_displayPosition, new GUIContent("Position"));
+                EditorGUI.indentLevel--;
+            }
 
             EditorGUILayout.Space();
 
